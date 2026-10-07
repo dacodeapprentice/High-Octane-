@@ -1,0 +1,6 @@
+{
+  "name": "AeroGlide - Godot 4 3D Glider Racer & Scene Studio",
+  "description": "Core 3D Godot 4.x scene architecture, GDScript gliding physics, camera tracking, and interactive 3D prototype simulator for high-octane racing games.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
