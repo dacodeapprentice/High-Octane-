@@ -1,11 +1,17 @@
 import React, { useState } from 'react';
-import { Copy, Check, Download, FileCode, Layers, Info, RefreshCw } from 'lucide-react';
+import { Copy, Check, Download, Layers, Info, RefreshCw } from 'lucide-react';
 import JSZip from 'jszip';
-import { PhysicsParams } from '../types.ts';
+import {
+  generateShipGd,
+  generateMainTscn,
+  generateProjectGodot,
+  generateReadme,
+  ShipPhysicsParams
+} from '../shipPhysics.ts';
 
 interface Props {
-  physics: PhysicsParams;
-  onPhysicsChange: (params: PhysicsParams) => void;
+  physics: ShipPhysicsParams;
+  onPhysicsChange: (params: ShipPhysicsParams) => void;
   onResetPhysics: () => void;
 }
 
@@ -16,268 +22,16 @@ export const GodotCodeViewer: React.FC<Props> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'main.tscn' | 'ship.gd' | 'project.godot' | 'custom' | 'nodes'>('main.tscn');
   const [copiedTab, setCopiedTab] = useState<string | null>(null);
-  const [customFileContent, setCustomFileContent] = useState<string>(`# Paste your existing Godot 4 .tscn or .gd file here to inspect or compare
+  const [customFileContent, setCustomFileContent] = useState<string>(`# High Octane 0G - Paste your custom .tscn or .gd file here to inspect or edit
 [gd_scene load_steps=2 format=3]
 
 [node name="CustomScene" type="Node3D"]
 `);
-  const [customFileName, setCustomFileName] = useState<string>('my_game.tscn');
+  const [customFileName, setCustomFileName] = useState<string>('my_scene.tscn');
 
-  // Dynamically generated ship.gd based on live tuned parameters
-  const generateShipGd = (p: PhysicsParams): string => {
-    return `extends CharacterBody3D
-
-## High-Octane Gliding Ship Movement & Camera Tracking Controller
-## Godot 4.x Compatible (CharacterBody3D arcade hover-racer physics)
-
-@export_group("Hover & Suspension")
-@export var hover_height: float = ${p.hoverHeight.toFixed(2)}
-@export var hover_force: float = ${p.hoverForce.toFixed(1)}
-@export var hover_damping: float = ${p.hoverDamping.toFixed(1)}
-
-@export_group("Thrusters & Speed")
-@export var max_speed: float = ${p.maxSpeed.toFixed(1)}
-@export var acceleration: float = ${p.acceleration.toFixed(1)}
-@export var reverse_brake_force: float = ${p.brakingForce.toFixed(1)}
-@export var drag: float = 0.988
-@export var boost_multiplier: float = ${p.boostMultiplier.toFixed(2)}
-@export var boost_acceleration: float = ${(p.acceleration * 1.8).toFixed(1)}
-
-@export_group("Steering & Aerodynamics")
-@export var steering_speed: float = ${p.steeringSpeed.toFixed(2)}
-@export var lateral_grip: float = ${p.lateralGrip.toFixed(2)} # 0.0 = pure ice drift, 1.0 = locked rails
-@export var max_roll_angle: float = ${p.maxRollAngle.toFixed(1)} # degrees of visual banking roll
-@export var roll_speed: float = ${p.rollSpeed.toFixed(1)}
-@export var pitch_tilt_angle: float = ${p.pitchTiltAngle.toFixed(1)} # degrees of nose pitch tilt
-
-@export_group("Camera Settings")
-@export var base_fov: float = ${p.cameraFov.toFixed(1)}
-@export var max_fov_boost: float = 16.0
-@export var camera_lerp_weight: float = 8.0
-
-# Node references
-@onready var raycast: RayCast3D = $RayCast3D
-@onready var mesh: MeshInstance3D = $MeshInstance3D
-@onready var camera: Camera3D = $Camera3D
-
-# Internal velocity & rotation state
-var current_turn_input: float = 0.0
-var current_roll: float = 0.0
-var current_pitch: float = 0.0
-var is_grounded: bool = false
-
-func _ready() -> void:
-	if camera:
-		camera.fov = base_fov
-
-func _physics_process(delta: float) -> void:
-	# 1. Gather player input (WASD / Arrows / Gamepad)
-	var throttle := Input.get_axis("ui_down", "ui_up") # -1.0 reverse/brake, +1.0 forward
-	var steer := Input.get_axis("ui_right", "ui_left")  # +1.0 turn left, -1.0 turn right
-	var is_boosting := Input.is_action_pressed("boost") or Input.is_key_pressed(KEY_SHIFT)
-
-	# 2. Hover Suspension: RayCast3D detection to track plane
-	if raycast and raycast.is_colliding():
-		is_grounded = true
-		var hit_point = raycast.get_collision_point()
-		var distance = global_position.distance_to(hit_point)
-		var compression = hover_height - distance
-		
-		# Spring force: F = k * x - c * v
-		var spring_force = compression * hover_force
-		var damping_force = velocity.y * hover_damping
-		velocity.y += (spring_force - damping_force) * delta
-	else:
-		is_grounded = false
-		# Apply gravity when airborne or over jumps
-		velocity += get_gravity() * delta
-
-	# 3. Steering & Yaw Rotation
-	if is_grounded or velocity.length() > 3.0:
-		current_turn_input = lerp(current_turn_input, steer * steering_speed, 10.0 * delta)
-		rotate_y(current_turn_input * delta)
-
-	# 4. Forward Thrusters & Air Braking
-	var forward_dir := -transform.basis.z.normalized()
-	var right_dir := transform.basis.x.normalized()
-	
-	var active_accel = boost_acceleration if is_boosting else acceleration
-	var active_top_speed = (max_speed * boost_multiplier) if is_boosting else max_speed
-
-	var forward_speed = velocity.dot(forward_dir)
-
-	if throttle > 0.0:
-		if forward_speed < active_top_speed:
-			velocity += forward_dir * (active_accel * throttle * delta)
-	elif throttle < 0.0:
-		velocity -= forward_dir * (reverse_brake_force * abs(throttle) * delta)
-
-	# 5. Gliding Aerodynamics: Decoupled forward & lateral drift velocities
-	var forward_vel = forward_dir * velocity.dot(forward_dir)
-	var lateral_vel = right_dir * velocity.dot(right_dir)
-	var vertical_vel = Vector3(0, velocity.y, 0)
-
-	# Lateral friction dampens sideways sliding according to grip factor
-	lateral_vel = lateral_vel * pow(1.0 - (1.0 - lateral_grip), delta * 60.0)
-	
-	# Aerodynamic forward air drag
-	forward_vel *= pow(drag, delta * 60.0)
-
-	velocity = forward_vel + lateral_vel + vertical_vel
-
-	# 6. Apply Movement in Godot 4
-	move_and_slide()
-
-	# 7. Visual Roll Banking & Pitch Tilt (giving that Wipeout / F-Zero feel)
-	var target_roll = -steer * deg_to_rad(max_roll_angle)
-	var target_pitch = throttle * deg_to_rad(pitch_tilt_angle)
-	current_roll = lerp(current_roll, target_roll, roll_speed * delta)
-	current_pitch = lerp(current_pitch, target_pitch, roll_speed * delta)
-
-	if mesh:
-		mesh.rotation.z = current_roll
-		mesh.rotation.x = -current_pitch
-
-	# 8. Dynamic Camera Tracking (Speed FOV expansion)
-	if camera:
-		var speed_ratio = clamp(velocity.length() / max_speed, 0.0, 1.8)
-		var target_fov = base_fov + (speed_ratio * max_fov_boost)
-		camera.fov = lerp(camera.fov, target_fov, camera_lerp_weight * delta)
-`;
-  };
-
-  const mainTscnContent = `[gd_scene load_steps=8 format=3 uid="uid://bq7xk4m8j2tq1"]
-
-[ext_resource type="Script" path="res://ship.gd" id="1_ship_script"]
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_track"]
-albedo_color = Color(0.12, 0.14, 0.18, 1)
-metallic = 0.1
-roughness = 0.7
-
-[sub_resource type="PlaneMesh" id="PlaneMesh_track"]
-material = SubResource("StandardMaterial3D_track")
-size = Vector2(250, 250)
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_track"]
-size = Vector3(250, 1, 250)
-
-[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ship"]
-albedo_color = Color(0.1, 0.65, 0.95, 1)
-metallic = 0.8
-roughness = 0.25
-emission_enabled = true
-emission = Color(0.05, 0.45, 0.85, 1)
-emission_energy_multiplier = 0.6
-
-[sub_resource type="BoxMesh" id="BoxMesh_ship"]
-material = SubResource("StandardMaterial3D_ship")
-size = Vector3(2, 0.6, 3.6)
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_ship"]
-size = Vector3(2, 0.6, 3.6)
-
-[sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
-sky_top_color = Color(0.15, 0.25, 0.45, 1)
-sky_horizon_color = Color(0.4, 0.45, 0.55, 1)
-ground_bottom_color = Color(0.08, 0.09, 0.12, 1)
-
-[sub_resource type="Sky" id="Sky_main"]
-sky_material = SubResource("ProceduralSkyMaterial_sky")
-
-[sub_resource type="Environment" id="Environment_main"]
-background_mode = 2
-sky = SubResource("Sky_main")
-ambient_light_source = 3
-ambient_light_color = Color(0.3, 0.35, 0.4, 1)
-tonemap_mode = 2
-glow_enabled = true
-glow_bloom = 0.2
-
-[node name="Main" type="Node3D"]
-
-[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("Environment_main")
-
-[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
-transform = Transform3D(0.866025, -0.353553, 0.353553, 0, 0.707107, 0.707107, -0.5, -0.612372, 0.612372, 0, 40, 0)
-shadow_enabled = true
-
-[node name="Track" type="StaticBody3D" parent="."]
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Track"]
-mesh = SubResource("PlaneMesh_track")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Track"]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
-shape = SubResource("BoxShape3D_track")
-
-[node name="Ship" type="CharacterBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, ${physics.hoverHeight.toFixed(1)}, 0)
-script = ExtResource("1_ship_script")
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Ship"]
-shape = SubResource("BoxShape3D_ship")
-
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Ship"]
-mesh = SubResource("BoxMesh_ship")
-
-[node name="RayCast3D" type="RayCast3D" parent="Ship"]
-target_position = Vector3(0, -2.5, 0)
-
-[node name="Camera3D" type="Camera3D" parent="Ship"]
-transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, ${physics.cameraHeight.toFixed(1)}, ${physics.cameraDistance.toFixed(1)})
-current = true
-fov = ${physics.cameraFov.toFixed(1)}
-`;
-
-  const projectGodotContent = `; Engine configuration file.
-; It's best edited using the editor UI and not directly,
-; since the parameters that go here are not all obvious.
-;
-; Format:
-;   [section] ; section goes between []
-;   param=value ; assign values to parameters
-
-config_version=5
-
-[application]
-
-config/name="AeroGlide - High Octane Glider Racer"
-config/description="3D Glider Racing prototype with hover physics and camera tracking"
-run/main_scene="res://main.tscn"
-config/features=PackedStringArray("4.3", "Forward Plus")
-
-[display]
-
-window/size/viewport_width=1920
-window/size/viewport_height=1080
-window/stretch/mode="canvas_items"
-window/stretch/aspect="expand"
-
-[input]
-
-ui_up={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"keycode":4194320), Object(InputEventKey,"keycode":87)]
-}
-ui_down={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"keycode":4194322), Object(InputEventKey,"keycode":83)]
-}
-ui_left={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"keycode":4194319), Object(InputEventKey,"keycode":65)]
-}
-ui_right={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"keycode":4194321), Object(InputEventKey,"keycode":68)]
-}
-boost={
-"deadzone": 0.5,
-"events": [Object(InputEventKey,"keycode":4194325), Object(InputEventKey,"keycode":32)]
-}
-`;
+  const mainTscnContent = generateMainTscn(physics);
+  const shipGdContent = generateShipGd(physics);
+  const projectGodotContent = generateProjectGodot();
 
   const handleCopy = (content: string, tabName: string) => {
     navigator.clipboard.writeText(content);
@@ -287,43 +41,16 @@ boost={
 
   const handleDownloadZip = async () => {
     const zip = new JSZip();
-    zip.file('main.tscn', mainTscnContent);
+    zip.file('main.tscn', generateMainTscn(physics));
     zip.file('ship.gd', generateShipGd(physics));
-    zip.file('project.godot', projectGodotContent);
-    zip.file('README.md', `# AeroGlide - 3D Glider Racer Prototype for Godot 4.x
-
-## How to Run in Godot 4:
-1. Open Godot Engine (version 4.2+ or 4.3+).
-2. Click "Import" and select the folder containing these unzipped files (or click "Scan").
-3. Godot will recognize the project and open the editor.
-4. Press F5 (or click the Play icon in top right) to launch main.tscn.
-
-## Controls:
-- W / Up Arrow: Forward Thrusters
-- S / Down Arrow: Air Brake / Reverse
-- A / Left Arrow: Turn Left (Rolls into turn)
-- D / Right Arrow: Turn Right (Rolls into turn)
-- Space / Shift: Nitro Boost
-
-## Node Architecture:
-- Main (Node3D)
-  - WorldEnvironment (Sky & ambient glow)
-  - DirectionalLight3D (Sunlight & shadows)
-  - Track (StaticBody3D)
-    - MeshInstance3D (PlaneMesh 250x250)
-    - CollisionShape3D (BoxShape3D)
-  - Ship (CharacterBody3D) [res://ship.gd]
-    - CollisionShape3D (BoxShape3D)
-    - MeshInstance3D (BoxMesh)
-    - RayCast3D (Hover ground detection)
-    - Camera3D (Parented directly behind ship)
-`);
+    zip.file('project.godot', generateProjectGodot());
+    zip.file('README.md', generateReadme());
 
     const blob = await zip.generateAsync({ type: 'blob' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'Godot4_Glider_Racer_Project.zip';
+    a.download = 'High_Octane_0G_Godot4_Project.zip';
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -335,7 +62,7 @@ boost={
       case 'main.tscn':
         return mainTscnContent;
       case 'ship.gd':
-        return generateShipGd(physics);
+        return shipGdContent;
       case 'project.godot':
         return projectGodotContent;
       case 'custom':
@@ -439,10 +166,10 @@ boost={
             <div className="p-4 rounded-lg bg-slate-950 border border-slate-800">
               <h3 className="text-sm font-bold text-cyan-400 mb-2 flex items-center gap-2">
                 <Layers className="w-4 h-4 text-cyan-400" />
-                Godot 4.x Node Hierarchy
+                High Octane 0G - Godot 4.x Node Hierarchy
               </h3>
               <p className="text-xs text-slate-400 mb-4 leading-relaxed">
-                This scene meets the exact core requirements: a plane for the track, a box for the ship, and a camera parented directly to the ship node.
+                Minimal core setup: a plane for the track, a box for the ship, and a camera parented directly to the ship node.
               </p>
 
               <div className="space-y-2 font-mono text-xs">
@@ -465,8 +192,15 @@ boost={
                       <div className="pl-4 space-y-1 text-slate-400 border-l border-slate-700/60 ml-2 mt-1">
                         <div>├─ <span className="text-slate-300">CollisionShape3D</span> <span className="text-slate-500">(BoxShape3D for ship body)</span></div>
                         <div>├─ <span className="text-slate-300">MeshInstance3D</span> <span className="text-slate-500">(BoxMesh 2x0.6x3.6m)</span></div>
-                        <div>├─ <span className="text-slate-300">RayCast3D</span> <span className="text-slate-500">(Hover suspension sensor, -2.5m)</span></div>
+                        <div>├─ <span className="text-slate-300">RayCast3D</span> <span className="text-slate-500">(Hover suspension sensor, -4.0m)</span></div>
                         <div>└─ <span className="text-fuchsia-400 font-medium">Camera3D</span> <span className="text-slate-500">(Parented behind ship at Y:2.5, Z:6.0)</span></div>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="text-purple-400">▼ HUD (CanvasLayer)</div>
+                      <div className="pl-4 space-y-1 text-slate-400 border-l border-slate-700/60 ml-2 mt-1">
+                        <div>└─ <span className="text-slate-300">HeatBar (ProgressBar)</span> <span className="text-slate-500">(Displays nitro heat & overheat warning)</span></div>
                       </div>
                     </div>
                   </div>
@@ -478,10 +212,10 @@ boost={
             <div className="p-4 rounded-lg bg-slate-950 border border-slate-800 text-xs space-y-2">
               <h4 className="font-semibold text-slate-200 flex items-center gap-1.5">
                 <Info className="w-4 h-4 text-cyan-400" />
-                Why CharacterBody3D for High-Octane Gliders?
+                Why CharacterBody3D for High Octane 0G?
               </h4>
               <p className="text-slate-400 leading-relaxed">
-                Classic hover-racing engines like <span className="text-cyan-300">Wipeout</span> and <span className="text-cyan-300">F-Zero</span> use kinematic raycast suspension rather than pure RigidBody physics. With Godot 4's <code className="text-amber-300 font-mono">move_and_slide()</code>, you gain millimeter-precise hover control, zero erratic tumbling, and full authority over lateral drift grip.
+                Classic zero-gravity and hover-racing physics (like <span className="text-cyan-300">Wipeout</span> and <span className="text-cyan-300">F-Zero</span>) use kinematic raycast suspension rather than unconstrained RigidBody physics. Godot 4's <code className="text-amber-300 font-mono">move_and_slide()</code> ensures smooth track adhesion, eliminates erratic tumbling, and gives precise control over aerodynamic lateral drift.
               </p>
             </div>
           </div>
@@ -532,16 +266,80 @@ boost={
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div>
               <div className="flex justify-between text-[11px] text-slate-400 mb-1">
-                <span>Hover Height</span>
-                <span className="font-mono text-cyan-400">{physics.hoverHeight.toFixed(1)}m</span>
+                <span>Idle Height</span>
+                <span className="font-mono text-cyan-400">{physics.idleHoverHeight.toFixed(1)}m</span>
               </div>
               <input
                 type="range"
-                min="0.6"
-                max="3.0"
+                min="1.2"
+                max="3.5"
                 step="0.1"
-                value={physics.hoverHeight}
-                onChange={(e) => onPhysicsChange({ ...physics, hoverHeight: parseFloat(e.target.value) })}
+                value={physics.idleHoverHeight}
+                onChange={(e) => onPhysicsChange({ ...physics, idleHoverHeight: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Cruise Height</span>
+                <span className="font-mono text-cyan-400">{physics.cruiseHoverHeight.toFixed(2)}m</span>
+              </div>
+              <input
+                type="range"
+                min="0.4"
+                max="1.6"
+                step="0.05"
+                value={physics.cruiseHoverHeight}
+                onChange={(e) => onPhysicsChange({ ...physics, cruiseHoverHeight: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Lift Transition</span>
+                <span className="font-mono text-cyan-400">{physics.hoverTransitionSpeed.toFixed(1)}x</span>
+              </div>
+              <input
+                type="range"
+                min="1.0"
+                max="10.0"
+                step="0.5"
+                value={physics.hoverTransitionSpeed}
+                onChange={(e) => onPhysicsChange({ ...physics, hoverTransitionSpeed: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Idle Bobbing</span>
+                <span className="font-mono text-cyan-400">{physics.idleBobAmount.toFixed(2)}m</span>
+              </div>
+              <input
+                type="range"
+                min="0.0"
+                max="0.25"
+                step="0.01"
+                value={physics.idleBobAmount}
+                onChange={(e) => onPhysicsChange({ ...physics, idleBobAmount: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Bob Speed</span>
+                <span className="font-mono text-cyan-400">{physics.idleBobSpeed.toFixed(1)}Hz</span>
+              </div>
+              <input
+                type="range"
+                min="0.5"
+                max="5.0"
+                step="0.5"
+                value={physics.idleBobSpeed}
+                onChange={(e) => onPhysicsChange({ ...physics, idleBobSpeed: parseFloat(e.target.value) })}
                 className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
               />
             </div>
@@ -590,6 +388,70 @@ boost={
                 step="2"
                 value={physics.maxRollAngle}
                 onChange={(e) => onPhysicsChange({ ...physics, maxRollAngle: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Heat Rate</span>
+                <span className="font-mono text-cyan-400">{physics.boostHeatRate.toFixed(1)}/s</span>
+              </div>
+              <input
+                type="range"
+                min="5.0"
+                max="40.0"
+                step="1.0"
+                value={physics.boostHeatRate}
+                onChange={(e) => onPhysicsChange({ ...physics, boostHeatRate: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Cool Rate</span>
+                <span className="font-mono text-cyan-400">{physics.coolRate.toFixed(1)}/s</span>
+              </div>
+              <input
+                type="range"
+                min="2.0"
+                max="25.0"
+                step="0.5"
+                value={physics.coolRate}
+                onChange={(e) => onPhysicsChange({ ...physics, coolRate: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Cool Delay</span>
+                <span className="font-mono text-cyan-400">{physics.cooldownDelay.toFixed(2)}s</span>
+              </div>
+              <input
+                type="range"
+                min="0.0"
+                max="1.5"
+                step="0.05"
+                value={physics.cooldownDelay}
+                onChange={(e) => onPhysicsChange({ ...physics, cooldownDelay: parseFloat(e.target.value) })}
+                className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
+              />
+            </div>
+
+            <div>
+              <div className="flex justify-between text-[11px] text-slate-400 mb-1">
+                <span>Recov Threshold</span>
+                <span className="font-mono text-cyan-400">{physics.recoverThreshold}%</span>
+              </div>
+              <input
+                type="range"
+                min="15"
+                max="80"
+                step="5"
+                value={physics.recoverThreshold}
+                onChange={(e) => onPhysicsChange({ ...physics, recoverThreshold: parseFloat(e.target.value) })}
                 className="w-full accent-cyan-400 h-1 bg-slate-800 rounded"
               />
             </div>

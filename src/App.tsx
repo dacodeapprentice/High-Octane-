@@ -16,7 +16,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowRight,
-  Sparkles,
   Zap
 } from 'lucide-react';
 import { Simulation3D } from './components/Simulation3D.tsx';
@@ -27,11 +26,15 @@ export default function App() {
   const [physics, setPhysics] = useState<PhysicsParams>(DEFAULT_PHYSICS);
   const [telemetry, setTelemetry] = useState({
     speedKmh: 0,
-    altitude: 1.3,
+    altitude: 2.0,
+    effectiveHoverHeight: 2.0,
+    targetHoverHeight: 2.0,
     rollDeg: 0,
     driftPercent: 0,
     isHovering: true,
-    isBoosting: false
+    isBoosting: false,
+    heat: 0,
+    isOverheated: false
   });
   const [isFullScreenSim, setIsFullScreenSim] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -62,7 +65,7 @@ export default function App() {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-sm font-extrabold tracking-tight text-white font-display">
-                AEROGLIDE
+                HIGH OCTANE 0G
               </h1>
               <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
                 GODOT 4.x
@@ -133,7 +136,10 @@ export default function App() {
 
             <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-slate-950/80 backdrop-blur-md border border-slate-800/80 font-mono text-xs shadow-lg">
               <span className="text-slate-400">ALT:</span>
-              <span className="text-cyan-300 font-bold">{telemetry.altitude}m</span>
+              <span className="text-cyan-300 font-bold">{telemetry.altitude.toFixed(2)}m</span>
+              <span className="text-[10px] text-slate-400 font-normal">
+                (lift: {telemetry.effectiveHoverHeight.toFixed(2)}m)
+              </span>
               <span className={`w-2 h-2 rounded-full ${telemetry.isHovering ? 'bg-emerald-400' : 'bg-amber-400'}`} />
             </div>
 
@@ -148,12 +154,101 @@ export default function App() {
               <span className="text-amber-400 font-medium">{telemetry.driftPercent}%</span>
             </div>
 
-            {telemetry.isBoosting && (
-              <div className="flex items-center gap-1 px-2.5 py-1 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-400/50 font-mono text-xs animate-pulse">
-                <Flame className="w-3.5 h-3.5 text-cyan-400" />
-                NITRO
+            {/* Nitro Heat Bar HUD */}
+            <div
+              className={`flex flex-col gap-1 px-3 py-1.5 rounded-md bg-slate-950/85 backdrop-blur-md border ${
+                telemetry.isOverheated
+                  ? 'border-rose-500 bg-rose-950/30 animate-pulse shadow-rose-950/80'
+                  : telemetry.heat > 80
+                  ? 'border-rose-500/50'
+                  : telemetry.heat > 50
+                  ? 'border-amber-500/50'
+                  : 'border-slate-800/80'
+              } font-mono text-xs shadow-lg min-w-[200px]`}
+            >
+              <div className="flex items-center justify-between text-[11px]">
+                <div className="flex items-center gap-1.5">
+                  <Flame
+                    className={`w-3.5 h-3.5 ${
+                      telemetry.isOverheated
+                        ? 'text-rose-400 fill-rose-500 animate-bounce'
+                        : telemetry.heat > 80
+                        ? 'text-rose-400 fill-rose-500'
+                        : telemetry.heat > 50
+                        ? 'text-amber-400 fill-amber-500'
+                        : 'text-cyan-400 fill-cyan-400'
+                    }`}
+                  />
+                  <span
+                    className={
+                      telemetry.isOverheated
+                        ? 'text-rose-400 font-black tracking-wider'
+                        : 'text-slate-300 font-medium'
+                    }
+                  >
+                    {telemetry.isOverheated ? 'OVERHEAT' : 'NITRO HEAT'}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  {telemetry.isBoosting && !telemetry.isOverheated && (
+                    <span className="text-[10px] text-cyan-300 animate-pulse font-bold">BURNING</span>
+                  )}
+                  <span
+                    className={`font-bold ${
+                      telemetry.isOverheated
+                        ? 'text-rose-400'
+                        : telemetry.heat > 80
+                        ? 'text-rose-400'
+                        : telemetry.heat > 50
+                        ? 'text-amber-300'
+                        : 'text-cyan-300'
+                    }`}
+                  >
+                    {Math.round(telemetry.heat)}%
+                  </span>
+                </div>
               </div>
-            )}
+
+              {/* Progress bar with recovery threshold marker */}
+              <div className="relative w-full h-2 bg-slate-800/90 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-75 rounded-full ${
+                    telemetry.isOverheated
+                      ? 'bg-rose-500 shadow-[0_0_8px_rgba(244,63,94,0.8)]'
+                      : telemetry.heat > 80
+                      ? 'bg-gradient-to-r from-amber-500 to-rose-500'
+                      : telemetry.heat > 50
+                      ? 'bg-gradient-to-r from-cyan-400 to-amber-400'
+                      : 'bg-cyan-400 shadow-[0_0_6px_rgba(34,211,238,0.5)]'
+                  }`}
+                  style={{ width: `${Math.min(100, Math.max(0, telemetry.heat))}%` }}
+                />
+                {/* Recovery Threshold Marker (default 40%) */}
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-white/80 z-10 pointer-events-none"
+                  style={{
+                    left: `${((physics.recoverThreshold ?? 40) / (physics.overheatThreshold || 100)) * 100}%`
+                  }}
+                  title={`Recovery Threshold: ${physics.recoverThreshold}%`}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[9px] text-slate-500 font-mono leading-none">
+                <span>0%</span>
+                <span
+                  className={
+                    telemetry.isOverheated
+                      ? 'text-amber-300 font-bold'
+                      : 'text-slate-400'
+                  }
+                >
+                  {telemetry.isOverheated
+                    ? `Cool <${physics.recoverThreshold}% to unlock`
+                    : `Recov: ${physics.recoverThreshold}%`}
+                </span>
+                <span>100%</span>
+              </div>
+            </div>
           </div>
 
           {/* Drive instructions pill overlay */}
@@ -218,14 +313,23 @@ export default function App() {
 
           <div className="absolute bottom-4 left-4 z-10 flex items-center gap-2 select-none">
             <button
+              disabled={telemetry.isOverheated}
               onMouseDown={() => triggerKeyEvent('boost', 'keydown')}
               onMouseUp={() => triggerKeyEvent('boost', 'keyup')}
               onTouchStart={() => triggerKeyEvent('boost', 'keydown')}
               onTouchEnd={() => triggerKeyEvent('boost', 'keyup')}
-              className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 active:from-cyan-400 active:to-blue-400 text-slate-950 font-bold rounded-lg border border-cyan-400/50 flex items-center gap-1.5 text-xs shadow-lg"
+              className={`px-4 py-2 font-bold rounded-lg border flex items-center gap-1.5 text-xs shadow-lg transition-all ${
+                telemetry.isOverheated
+                  ? 'bg-rose-950/80 border-rose-500/80 text-rose-300 opacity-70 cursor-not-allowed animate-pulse'
+                  : 'bg-gradient-to-r from-cyan-600 to-blue-600 active:from-cyan-400 active:to-blue-400 text-slate-950 border-cyan-400/50'
+              }`}
             >
-              <Flame className="w-4 h-4 fill-slate-950" />
-              NITRO BOOST
+              <Flame
+                className={`w-4 h-4 ${
+                  telemetry.isOverheated ? 'text-rose-400 fill-rose-500' : 'fill-slate-950'
+                }`}
+              />
+              {telemetry.isOverheated ? 'OVERHEATED (COOLING)' : 'NITRO BOOST'}
             </button>
           </div>
         </div>

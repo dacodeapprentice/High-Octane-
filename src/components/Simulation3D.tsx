@@ -7,10 +7,14 @@ interface SimulationProps {
   onTelemetryUpdate: (telemetry: {
     speedKmh: number;
     altitude: number;
+    effectiveHoverHeight: number;
+    targetHoverHeight: number;
     rollDeg: number;
     driftPercent: number;
     isHovering: boolean;
     isBoosting: boolean;
+    heat: number;
+    isOverheated: boolean;
   }) => void;
   isPaused: boolean;
 }
@@ -82,7 +86,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
     scene.fog = new THREE.FogExp2(0x060913, 0.007);
 
     const camera = new THREE.PerspectiveCamera(
-      physics.cameraFov,
+      physics.baseFov,
       container.clientWidth / container.clientHeight,
       0.1,
       1000
@@ -241,7 +245,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
     // --- GLIDING SHIP (Requested: A rectangle for the ship) ---
     // Root ship container (handles world translation and yaw)
     const shipRoot = new THREE.Group();
-    shipRoot.position.set(0, physics.hoverHeight, 0);
+    shipRoot.position.set(0, physics.idleHoverHeight, 0);
     scene.add(shipRoot);
 
     // Ship Visual Model (handles roll banking and pitch tilt)
@@ -354,6 +358,13 @@ export const Simulation3D: React.FC<SimulationProps> = ({
     let currentRoll = 0;
     let currentPitch = 0;
     let turnRate = 0;
+    let currentSpeedRatio = 0;
+    let currentBoostRatio = 0;
+    let bobTime = 0;
+    let effectiveHoverHeight = physics.idleHoverHeight;
+    let heat = 0.0;
+    let isOverheated = false;
+    let timeSinceBoost = 0.0;
 
     // Rigid parented camera anchor node (Requested: camera parented to the ship)
     const cameraRigidAnchor = new THREE.Object3D();
@@ -413,23 +424,79 @@ export const Simulation3D: React.FC<SimulationProps> = ({
       // Handle reset
       if (resetSignalRef.current) {
         resetSignalRef.current = false;
-        shipRoot.position.set(0, p.hoverHeight, 0);
+        shipRoot.position.set(0, p.idleHoverHeight, 0);
         velocity.set(0, 0, 0);
         shipYaw = 0;
         currentRoll = 0;
         currentPitch = 0;
         turnRate = 0;
+        currentSpeedRatio = 0;
+        currentBoostRatio = 0;
+        bobTime = 0;
+        effectiveHoverHeight = p.idleHoverHeight;
+        heat = 0.0;
+        isOverheated = false;
+        timeSinceBoost = 0.0;
       }
 
       // Input calculation
       const throttle = (keys.forward ? 1.0 : 0.0) - (keys.backward ? 1.0 : 0.0);
       const steer = (keys.left ? 1.0 : 0.0) - (keys.right ? 1.0 : 0.0); // +1 = turn left
-      const isBoosting = keys.boost;
+      const rawBoostInput = keys.boost;
 
-      // 1. Raycast Hover Suspension (downward to track plane at y = 0)
+      // 1. Nitro Overheat System Logic
+      // Boost is only active if boost key held, throttle forward, and engine NOT overheated
+      const isBoosting = rawBoostInput && throttle > 0.0 && !isOverheated;
+
+      if (isBoosting) {
+        timeSinceBoost = 0.0;
+        heat = Math.min(p.overheatThreshold, heat + p.boostHeatRate * dt);
+        if (heat >= p.overheatThreshold) {
+          isOverheated = true;
+        }
+      } else {
+        timeSinceBoost += dt;
+        if (timeSinceBoost >= p.cooldownDelay) {
+          heat = Math.max(0.0, heat - p.coolRate * dt);
+          if (isOverheated && heat <= p.recoverThreshold) {
+            isOverheated = false;
+          }
+        }
+      }
+
+      // 1. Hover Lift Effect Calculation (Opposing forces: hover vs acceleration)
+      const horizontalSpeed = Math.sqrt(velocity.x * velocity.x + velocity.z * velocity.z);
+      const targetSpeedRatio = Math.min(1.0, horizontalSpeed / p.maxSpeed);
+
+      // Smooth speed ratio so transition has aerodynamic inertia
+      currentSpeedRatio = THREE.MathUtils.lerp(
+        currentSpeedRatio,
+        targetSpeedRatio,
+        Math.min(1.0, p.hoverTransitionSpeed * dt)
+      );
+
+      // Boost lowers it a little further (smoothly)
+      const targetBoost = isBoosting ? 1.0 : 0.0;
+      currentBoostRatio = THREE.MathUtils.lerp(
+        currentBoostRatio,
+        targetBoost,
+        Math.min(1.0, p.hoverTransitionSpeed * dt)
+      );
+      const boostDrop = currentBoostRatio * 0.15;
+
+      // Gentle idle bobbing sine wave when slowed or stopped (fades out at speed)
+      bobTime += dt * p.idleBobSpeed;
+      const bobFactor = Math.max(0.0, 1.0 - currentSpeedRatio);
+      const bobOffset = Math.sin(bobTime * Math.PI * 2.0) * p.idleBobAmount * bobFactor;
+
+      // Target hover height smoothly transitions from idle (high) to cruise (low)
+      const baseTargetHeight = THREE.MathUtils.lerp(p.idleHoverHeight, p.cruiseHoverHeight, currentSpeedRatio);
+      effectiveHoverHeight = Math.max(0.4, baseTargetHeight - boostDrop + bobOffset);
+
+      // 2. Raycast Hover Suspension (downward to track plane at y = 0)
       const currentAltitude = shipRoot.position.y;
-      const compression = p.hoverHeight - currentAltitude;
-      const isHovering = currentAltitude < p.hoverHeight * 2.2;
+      const compression = effectiveHoverHeight - currentAltitude;
+      const isHovering = currentAltitude < p.idleHoverHeight + 2.0;
 
       if (isHovering) {
         const springForce = compression * p.hoverForce;
@@ -441,8 +508,8 @@ export const Simulation3D: React.FC<SimulationProps> = ({
       }
 
       // Bounce prevention on track plane ground
-      if (shipRoot.position.y < 0.3) {
-        shipRoot.position.y = 0.3;
+      if (shipRoot.position.y < 0.35) {
+        shipRoot.position.y = 0.35;
         if (velocity.y < 0) velocity.y = 0;
       }
 
@@ -457,7 +524,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
       const rightDir = new THREE.Vector3(1, 0, 0).applyAxisAngle(new THREE.Vector3(0, 1, 0), shipYaw);
 
       // 3. Forward Thruster Acceleration & Reverse Air-Braking
-      const activeAccel = isBoosting ? p.acceleration * 1.8 : p.acceleration;
+      const activeAccel = isBoosting ? p.boostAcceleration : p.acceleration;
       const activeMaxSpeed = isBoosting ? p.maxSpeed * p.boostMultiplier : p.maxSpeed;
 
       const forwardSpeed = velocity.dot(forwardDir);
@@ -481,7 +548,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
       lateralComp.multiplyScalar(gripDamp);
 
       // Aerodynamic forward drag
-      const dragFactor = Math.pow(0.988, dt * 60.0);
+      const dragFactor = Math.pow(p.drag, dt * 60.0);
       forwardComp.multiplyScalar(dragFactor);
 
       velocity.copy(forwardComp).add(lateralComp).add(verticalComp);
@@ -518,7 +585,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
       // Update ground shadow blob
       shadowMesh.position.set(shipRoot.position.x, 0.03, shipRoot.position.z);
       shadowMesh.rotation.z = -shipYaw;
-      const shadowScale = Math.max(0.4, 1.0 - (shipRoot.position.y - p.hoverHeight) * 0.2);
+      const shadowScale = Math.max(0.4, 1.0 - (shipRoot.position.y - effectiveHoverHeight) * 0.2);
       shadowMesh.scale.set(shadowScale, shadowScale, shadowScale);
 
       // 7. Dynamic Camera Tracking
@@ -533,7 +600,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
         camera.quaternion.copy(shipRoot.quaternion);
         // Tilt slightly down to look at ship forward
         camera.rotateX(-THREE.MathUtils.degToRad(12));
-        camera.fov = p.cameraFov;
+        camera.fov = p.baseFov;
         camera.updateProjectionMatrix();
       } else if (camMode === 'smooth') {
         // High-octane smooth chaser with dynamic FOV stretch (F-Zero / Wipeout style)
@@ -556,8 +623,8 @@ export const Simulation3D: React.FC<SimulationProps> = ({
         camera.lookAt(smoothCamLook);
 
         // Speed FOV warp
-        const targetFov = p.cameraFov + speedRatio * 16.0;
-        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, 8.0 * dt);
+        const targetFov = p.baseFov + speedRatio * p.maxFovBoost;
+        camera.fov = THREE.MathUtils.lerp(camera.fov, targetFov, p.cameraLerpWeight * dt);
         camera.updateProjectionMatrix();
       } else if (camMode === 'cockpit') {
         // Nose camera inside cockpit
@@ -565,7 +632,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
         camera.position.copy(cockpitPos);
         const lookTarget = shipRoot.position.clone().add(forwardDir.clone().multiplyScalar(20.0));
         camera.lookAt(lookTarget);
-        camera.fov = p.cameraFov + 10;
+        camera.fov = p.baseFov + 10;
         camera.updateProjectionMatrix();
       } else if (camMode === 'orbit') {
         // Free orbit camera around ship
@@ -574,7 +641,7 @@ export const Simulation3D: React.FC<SimulationProps> = ({
         const oz = shipRoot.position.z + orbitDistance * Math.sin(orbitPolar) * Math.cos(orbitAzimuth);
         camera.position.set(ox, oy, oz);
         camera.lookAt(shipRoot.position.clone().add(new THREE.Vector3(0, 0.5, 0)));
-        camera.fov = p.cameraFov;
+        camera.fov = p.baseFov;
         camera.updateProjectionMatrix();
       }
 
@@ -586,10 +653,14 @@ export const Simulation3D: React.FC<SimulationProps> = ({
       onTelemetryUpdate({
         speedKmh,
         altitude: parseFloat(shipRoot.position.y.toFixed(2)),
+        effectiveHoverHeight: parseFloat(effectiveHoverHeight.toFixed(2)),
+        targetHoverHeight: parseFloat(baseTargetHeight.toFixed(2)),
         rollDeg: Math.round(THREE.MathUtils.radToDeg(currentRoll)),
         driftPercent,
         isHovering,
-        isBoosting
+        isBoosting,
+        heat: parseFloat(heat.toFixed(1)),
+        isOverheated
       });
 
       renderer.render(scene, camera);

@@ -10,8 +10,8 @@ config_version=5
 
 [application]
 
-config/name="AeroGlide - High Octane Glider Racer"
-config/description="3D Glider Racing prototype with hover physics and camera tracking"
+config/name="High Octane 0G"
+config/description="High Octane 0G - 3D Glider Racing prototype with hover physics and camera tracking"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
 config/icon="res://icon.svg"

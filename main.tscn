@@ -1,6 +1,48 @@
-[gd_scene load_steps=8 format=3 uid="uid://bq7xk4m8j2tq1"]
+[gd_scene load_steps=11 format=3 uid="uid://bq7xk4m8j2tq1"]
 
 [ext_resource type="Script" path="res://ship.gd" id="1_ship_script"]
+
+[sub_resource type="GDScript" id="GDScript_hud"]
+script/source = "extends CanvasLayer
+
+@onready var heat_bar: ProgressBar = $HeatBar
+@onready var heat_label: Label = $HeatBar/HeatLabel
+@onready var ship: CharacterBody3D = $\"../Ship\"
+
+func _ready() -> void:
+	if ship:
+		ship.heat_changed.connect(_on_heat_changed)
+
+func _on_heat_changed(current_heat: float, is_overheated: bool) -> void:
+	if heat_bar:
+		heat_bar.value = current_heat
+	if heat_label:
+		if is_overheated:
+			heat_label.text = \"ENGINE OVERHEATED (COOLING)\"
+			heat_label.modulate = Color(1.0, 0.2, 0.2, 1.0)
+		else:
+			heat_label.text = \"NITRO HEAT: %d%%\" % int(current_heat)
+			heat_label.modulate = Color(0.2, 0.9, 1.0, 1.0)
+"
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_heat_bg"]
+bg_color = Color(0.05, 0.07, 0.11, 0.85)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.3, 0.45, 0.6)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_heat_fill"]
+bg_color = Color(0.0, 0.85, 1.0, 1.0)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_track"]
 albedo_color = Color(0.12, 0.14, 0.18, 1)
@@ -65,7 +107,7 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, -0.5, 0)
 shape = SubResource("BoxShape3D_track")
 
 [node name="Ship" type="CharacterBody3D" parent="."]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2.0, 0)
 script = ExtResource("1_ship_script")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ship"]
@@ -75,9 +117,46 @@ shape = SubResource("BoxShape3D_ship")
 mesh = SubResource("BoxMesh_ship")
 
 [node name="RayCast3D" type="RayCast3D" parent="Ship"]
-target_position = Vector3(0, -2.5, 0)
+target_position = Vector3(0, -4.0, 0)
 
 [node name="Camera3D" type="Camera3D" parent="Ship"]
-transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 2.5, 6)
+transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 2.5, 6.0)
 current = true
 fov = 75.0
+
+[node name="HUD" type="CanvasLayer" parent="."]
+script = SubResource("GDScript_hud")
+
+[node name="HeatBar" type="ProgressBar" parent="HUD"]
+anchors_preset = 7
+anchor_left = 0.5
+anchor_top = 1.0
+anchor_right = 0.5
+anchor_bottom = 1.0
+offset_left = -150.0
+offset_top = -54.0
+offset_right = 150.0
+offset_bottom = -34.0
+grow_horizontal = 2
+grow_vertical = 0
+theme_override_styles/background = SubResource("StyleBoxFlat_heat_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_heat_fill")
+max_value = 100.0
+show_percentage = false
+
+[node name="HeatLabel" type="Label" parent="HUD/HeatBar"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -100.0
+offset_top = -12.0
+offset_right = 100.0
+offset_bottom = 12.0
+grow_horizontal = 2
+grow_vertical = 2
+text = "NITRO HEAT: 0%"
+horizontal_alignment = 1
+vertical_alignment = 1
