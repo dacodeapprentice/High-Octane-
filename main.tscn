@@ -113,9 +113,6 @@ script = ExtResource("1_ship_script")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ship"]
 shape = SubResource("BoxShape3D_ship")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Ship"]
-mesh = SubResource("BoxMesh_ship")
-
 [node name="RayCast3D" type="RayCast3D" parent="Ship"]
 target_position = Vector3(0, -4.0, 0)
 
@@ -123,6 +120,11 @@ target_position = Vector3(0, -4.0, 0)
 transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, 2.5, 6.0)
 current = true
 fov = 75.0
+
+[node name="ShipModel" type="Node3D" parent="Ship"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ship/ShipModel"]
+mesh = SubResource("BoxMesh_ship")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = SubResource("GDScript_hud")

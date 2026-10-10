@@ -2,6 +2,7 @@ extends CharacterBody3D
 
 ## High Octane 0G - Gliding Ship Movement & Camera Tracking Controller
 ## Godot 4.x Compatible (CharacterBody3D Arcade Hover-Racer Physics)
+## Independent Physics Body & Swappable 3D Mesh Architecture
 
 signal heat_changed(current_heat: float, is_overheated: bool)
 
@@ -29,6 +30,14 @@ signal heat_changed(current_heat: float, is_overheated: bool)
 @export var overheat_threshold: float = 100.0
 @export var recover_threshold: float = 40.0
 
+@export_group("3D Visual Model & Swappable Mesh")
+@export var model_scale: float = 1.00
+@export var model_forward_offset_deg: float = 0.0 # Rotation on Y axis (degrees)
+@export var model_offset: Vector3 = Vector3.ZERO
+@export var target_model_length: float = 4.0
+@export var collider_size: Vector3 = Vector3(2.0, 0.6, 3.6)
+@export var auto_fit_collider_to_model: bool = false
+
 @export_group("Steering & Aerodynamics")
 @export var steering_speed: float = 2.60
 @export var lateral_grip: float = 0.86 # 0.0 = pure ice drift, 1.0 = locked rails
@@ -41,9 +50,10 @@ signal heat_changed(current_heat: float, is_overheated: bool)
 @export var max_fov_boost: float = 16.0
 @export var camera_lerp_weight: float = 8.0
 
-# Node references
+# Node references (Physics is fully decoupled from the visual mesh!)
 @onready var raycast: RayCast3D = $RayCast3D
-@onready var mesh: MeshInstance3D = $MeshInstance3D
+@onready var ship_model: Node3D = $ShipModel
+@onready var collision_shape: CollisionShape3D = $CollisionShape3D
 @onready var camera: Camera3D = $Camera3D
 
 # Internal velocity & rotation state
@@ -68,7 +78,63 @@ func _ready() -> void:
 		camera.fov = base_fov
 	if raycast:
 		raycast.target_position = Vector3(0, -4.0, 0)
+	apply_model_transform()
 	heat_changed.emit(heat, is_overheated)
+
+## Applies model scale and orientation offsets to the visual ShipModel pivot
+func apply_model_transform() -> void:
+	if not ship_model:
+		return
+	ship_model.position = model_offset
+	ship_model.rotation.y = deg_to_rad(model_forward_offset_deg)
+	ship_model.scale = Vector3.ONE * model_scale
+
+## Swaps the 3D model with any imported GLB scene, auto-centers its AABB and normalizes length
+func set_ship_model(new_model_scene: PackedScene) -> void:
+	if not ship_model or not new_model_scene:
+		return
+	
+	# Clear previous model instances safely
+	for child in ship_model.get_children():
+		child.queue_free()
+	
+	# Instantiate imported scene
+	var instance = new_model_scene.instantiate()
+	ship_model.add_child(instance)
+	
+	# Calculate combined AABB
+	var combined_aabb := AABB()
+	var has_aabb := false
+	
+	for child in instance.find_children("*", "VisualInstance3D"):
+		if child is VisualInstance3D:
+			var aabb = child.get_aabb()
+			var child_trans = instance.global_transform.affine_inverse() * child.global_transform
+			var transformed_aabb = child_trans * aabb
+			if not has_aabb:
+				combined_aabb = transformed_aabb
+				has_aabb = true
+			else:
+				combined_aabb = combined_aabb.merge(transformed_aabb)
+	
+	if has_aabb:
+		# Auto-center pivot: center horizontally, align bottom at Y = 0
+		var center = combined_aabb.get_center()
+		instance.position = Vector3(-center.x, -combined_aabb.position.y, -center.z)
+		
+		# Uniform scale normalization to target_model_length
+		var length = combined_aabb.size.z
+		if length > 0.05:
+			var scale_factor = target_model_length / length
+			instance.scale = Vector3.ONE * scale_factor
+		
+		# Optional auto-fit collider from model bounding box
+		if auto_fit_collider_to_model and collision_shape:
+			var box_shape = collision_shape.shape as BoxShape3D
+			if not box_shape:
+				box_shape = BoxShape3D.new()
+				collision_shape.shape = box_shape
+			box_shape.size = Vector3(combined_aabb.size.x, combined_aabb.size.y, target_model_length)
 
 func _physics_process(delta: float) -> void:
 	# 1. Gather player input (WASD / Arrows / Gamepad)
@@ -77,7 +143,6 @@ func _physics_process(delta: float) -> void:
 	var raw_boost_input := Input.is_action_pressed("boost") or Input.is_key_pressed(KEY_SHIFT)
 
 	# 2. Nitro Overheat System Logic
-	# Boost only functions if boost key is pressed, throttle is forward, and engine is NOT overheated
 	var is_boosting := raw_boost_input and throttle > 0.0 and not is_overheated
 
 	if is_boosting:
@@ -167,15 +232,15 @@ func _physics_process(delta: float) -> void:
 	# 8. Apply Movement in Godot 4
 	move_and_slide()
 
-	# 9. Visual Roll Banking & Pitch Tilt
+	# 9. Visual Roll Banking & Pitch Tilt applied ONLY to the ShipModel pivot
 	var target_roll = -steer * deg_to_rad(max_roll_angle)
 	var target_pitch = throttle * deg_to_rad(pitch_tilt_angle)
 	current_roll = lerp(current_roll, target_roll, roll_speed * delta)
 	current_pitch = lerp(current_pitch, target_pitch, roll_speed * delta)
 
-	if mesh:
-		mesh.rotation.z = current_roll
-		mesh.rotation.x = -current_pitch
+	if ship_model:
+		ship_model.rotation.z = current_roll
+		ship_model.rotation.x = -current_pitch
 
 	# 10. Dynamic Camera Tracking (Speed FOV expansion)
 	if camera:

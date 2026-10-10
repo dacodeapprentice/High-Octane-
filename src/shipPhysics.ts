@@ -1,6 +1,7 @@
 /**
  * Canonical Single Source of Truth for "High Octane 0G"
  * Physics parameters, GDScript generator, and Godot 4 scene definition.
+ * Decouples physics body from visual 3D mesh (supporting custom GLB import).
  */
 
 export interface ShipPhysicsParams {
@@ -30,6 +31,15 @@ export interface ShipPhysicsParams {
   cooldownDelay: number;
   overheatThreshold: number;
   recoverThreshold: number;
+
+  // 3D Model Decoupling & Normalization
+  modelScale: number;
+  modelForwardOffsetDeg: number;
+  targetModelLength: number;
+  colliderSizeX: number;
+  colliderSizeY: number;
+  colliderSizeZ: number;
+  autoFitCollider: boolean;
 
   // Steering & Aerodynamics
   steeringSpeed: number;
@@ -74,6 +84,15 @@ export const DEFAULT_SHIP_PHYSICS: ShipPhysicsParams = {
   overheatThreshold: 100.0,
   recoverThreshold: 40.0,
 
+  // 3D Model Decoupling & Normalization
+  modelScale: 1.0,
+  modelForwardOffsetDeg: 0.0,
+  targetModelLength: 4.0,
+  colliderSizeX: 2.0,
+  colliderSizeY: 0.6,
+  colliderSizeZ: 3.6,
+  autoFitCollider: false,
+
   steeringSpeed: 2.6,
   lateralGrip: 0.86,
   maxRollAngle: 30.0,
@@ -105,10 +124,19 @@ export function generateShipGd(p: ShipPhysicsParams = DEFAULT_SHIP_PHYSICS): str
   const overheatThreshold = (p.overheatThreshold ?? 100.0).toFixed(1);
   const recoverThreshold = (p.recoverThreshold ?? 40.0).toFixed(1);
 
+  const modelScale = (p.modelScale ?? 1.0).toFixed(2);
+  const modelForwardOffsetDeg = (p.modelForwardOffsetDeg ?? 0.0).toFixed(1);
+  const targetModelLength = (p.targetModelLength ?? 4.0).toFixed(1);
+  const colX = (p.colliderSizeX ?? 2.0).toFixed(1);
+  const colY = (p.colliderSizeY ?? 0.6).toFixed(1);
+  const colZ = (p.colliderSizeZ ?? 3.6).toFixed(1);
+  const autoFitCol = p.autoFitCollider ? 'true' : 'false';
+
   return `extends CharacterBody3D
 
 ## High Octane 0G - Gliding Ship Movement & Camera Tracking Controller
 ## Godot 4.x Compatible (CharacterBody3D Arcade Hover-Racer Physics)
+## Independent Physics Body & Swappable 3D Mesh Architecture
 
 signal heat_changed(current_heat: float, is_overheated: bool)
 
@@ -136,6 +164,14 @@ signal heat_changed(current_heat: float, is_overheated: bool)
 @export var overheat_threshold: float = ${overheatThreshold}
 @export var recover_threshold: float = ${recoverThreshold}
 
+@export_group("3D Visual Model & Swappable Mesh")
+@export var model_scale: float = ${modelScale}
+@export var model_forward_offset_deg: float = ${modelForwardOffsetDeg} # Rotation on Y axis (degrees)
+@export var model_offset: Vector3 = Vector3.ZERO
+@export var target_model_length: float = ${targetModelLength}
+@export var collider_size: Vector3 = Vector3(${colX}, ${colY}, ${colZ})
+@export var auto_fit_collider_to_model: bool = ${autoFitCol}
+
 @export_group("Steering & Aerodynamics")
 @export var steering_speed: float = ${p.steeringSpeed.toFixed(2)}
 @export var lateral_grip: float = ${p.lateralGrip.toFixed(2)} # 0.0 = pure ice drift, 1.0 = locked rails
@@ -148,9 +184,10 @@ signal heat_changed(current_heat: float, is_overheated: bool)
 @export var max_fov_boost: float = ${p.maxFovBoost.toFixed(1)}
 @export var camera_lerp_weight: float = ${p.cameraLerpWeight.toFixed(1)}
 
-# Node references
+# Node references (Physics is fully decoupled from the visual mesh!)
 @onready var raycast: RayCast3D = $RayCast3D
-@onready var mesh: MeshInstance3D = $MeshInstance3D
+@onready var ship_model: Node3D = $ShipModel
+@onready var collision_shape: CollisionShape3D = $CollisionShape3D
 @onready var camera: Camera3D = $Camera3D
 
 # Internal velocity & rotation state
@@ -175,7 +212,63 @@ func _ready() -> void:
 		camera.fov = base_fov
 	if raycast:
 		raycast.target_position = Vector3(0, -${raycastLength}, 0)
+	apply_model_transform()
 	heat_changed.emit(heat, is_overheated)
+
+## Applies model scale and orientation offsets to the visual ShipModel pivot
+func apply_model_transform() -> void:
+	if not ship_model:
+		return
+	ship_model.position = model_offset
+	ship_model.rotation.y = deg_to_rad(model_forward_offset_deg)
+	ship_model.scale = Vector3.ONE * model_scale
+
+## Swaps the 3D model with any imported GLB scene, auto-centers its AABB and normalizes length
+func set_ship_model(new_model_scene: PackedScene) -> void:
+	if not ship_model or not new_model_scene:
+		return
+	
+	# Clear previous model instances safely
+	for child in ship_model.get_children():
+		child.queue_free()
+	
+	# Instantiate imported scene
+	var instance = new_model_scene.instantiate()
+	ship_model.add_child(instance)
+	
+	# Calculate combined AABB
+	var combined_aabb := AABB()
+	var has_aabb := false
+	
+	for child in instance.find_children("*", "VisualInstance3D"):
+		if child is VisualInstance3D:
+			var aabb = child.get_aabb()
+			var child_trans = instance.global_transform.affine_inverse() * child.global_transform
+			var transformed_aabb = child_trans * aabb
+			if not has_aabb:
+				combined_aabb = transformed_aabb
+				has_aabb = true
+			else:
+				combined_aabb = combined_aabb.merge(transformed_aabb)
+	
+	if has_aabb:
+		# Auto-center pivot: center horizontally, align bottom at Y = 0
+		var center = combined_aabb.get_center()
+		instance.position = Vector3(-center.x, -combined_aabb.position.y, -center.z)
+		
+		# Uniform scale normalization to target_model_length
+		var length = combined_aabb.size.z
+		if length > 0.05:
+			var scale_factor = target_model_length / length
+			instance.scale = Vector3.ONE * scale_factor
+		
+		# Optional auto-fit collider from model bounding box
+		if auto_fit_collider_to_model and collision_shape:
+			var box_shape = collision_shape.shape as BoxShape3D
+			if not box_shape:
+				box_shape = BoxShape3D.new()
+				collision_shape.shape = box_shape
+			box_shape.size = Vector3(combined_aabb.size.x, combined_aabb.size.y, target_model_length)
 
 func _physics_process(delta: float) -> void:
 	# 1. Gather player input (WASD / Arrows / Gamepad)
@@ -184,7 +277,6 @@ func _physics_process(delta: float) -> void:
 	var raw_boost_input := Input.is_action_pressed("boost") or Input.is_key_pressed(KEY_SHIFT)
 
 	# 2. Nitro Overheat System Logic
-	# Boost only functions if boost key is pressed, throttle is forward, and engine is NOT overheated
 	var is_boosting := raw_boost_input and throttle > 0.0 and not is_overheated
 
 	if is_boosting:
@@ -274,15 +366,15 @@ func _physics_process(delta: float) -> void:
 	# 8. Apply Movement in Godot 4
 	move_and_slide()
 
-	# 9. Visual Roll Banking & Pitch Tilt
+	# 9. Visual Roll Banking & Pitch Tilt applied ONLY to the ShipModel pivot
 	var target_roll = -steer * deg_to_rad(max_roll_angle)
 	var target_pitch = throttle * deg_to_rad(pitch_tilt_angle)
 	current_roll = lerp(current_roll, target_roll, roll_speed * delta)
 	current_pitch = lerp(current_pitch, target_pitch, roll_speed * delta)
 
-	if mesh:
-		mesh.rotation.z = current_roll
-		mesh.rotation.x = -current_pitch
+	if ship_model:
+		ship_model.rotation.z = current_roll
+		ship_model.rotation.x = -current_pitch
 
 	# 10. Dynamic Camera Tracking (Speed FOV expansion)
 	if camera:
@@ -293,11 +385,14 @@ func _physics_process(delta: float) -> void:
 }
 
 /**
- * Generates the canonical Godot 4 main.tscn scene file with CanvasLayer HUD & ProgressBar.
+ * Generates the canonical Godot 4 main.tscn scene file with decoupled ShipModel pivot node.
  */
 export function generateMainTscn(p: ShipPhysicsParams = DEFAULT_SHIP_PHYSICS): string {
   const idleHeight = p.idleHoverHeight ?? 2.0;
   const raycastLength = (idleHeight + 2.0).toFixed(1);
+  const colX = (p.colliderSizeX ?? 2.0).toFixed(1);
+  const colY = (p.colliderSizeY ?? 0.6).toFixed(1);
+  const colZ = (p.colliderSizeZ ?? 3.6).toFixed(1);
 
   return `[gd_scene load_steps=11 format=3 uid="uid://bq7xk4m8j2tq1"]
 
@@ -370,7 +465,7 @@ material = SubResource("StandardMaterial3D_ship")
 size = Vector3(2, 0.6, 3.6)
 
 [sub_resource type="BoxShape3D" id="BoxShape3D_ship"]
-size = Vector3(2, 0.6, 3.6)
+size = Vector3(${colX}, ${colY}, ${colZ})
 
 [sub_resource type="ProceduralSkyMaterial" id="ProceduralSkyMaterial_sky"]
 sky_top_color = Color(0.15, 0.25, 0.45, 1)
@@ -414,9 +509,6 @@ script = ExtResource("1_ship_script")
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Ship"]
 shape = SubResource("BoxShape3D_ship")
 
-[node name="MeshInstance3D" type="MeshInstance3D" parent="Ship"]
-mesh = SubResource("BoxMesh_ship")
-
 [node name="RayCast3D" type="RayCast3D" parent="Ship"]
 target_position = Vector3(0, -${raycastLength}, 0)
 
@@ -424,6 +516,11 @@ target_position = Vector3(0, -${raycastLength}, 0)
 transform = Transform3D(1, 0, 0, 0, 0.965926, 0.258819, 0, -0.258819, 0.965926, 0, ${p.cameraHeight.toFixed(1)}, ${p.cameraDistance.toFixed(1)})
 current = true
 fov = ${p.baseFov.toFixed(1)}
+
+[node name="ShipModel" type="Node3D" parent="Ship"]
+
+[node name="MeshInstance3D" type="MeshInstance3D" parent="Ship/ShipModel"]
+mesh = SubResource("BoxMesh_ship")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 script = SubResource("GDScript_hud")
@@ -481,7 +578,7 @@ config_version=5
 [application]
 
 config/name="High Octane 0G"
-config/description="High Octane 0G - 3D Glider Racing prototype with hover physics, nitro overheat, and camera tracking"
+config/description="High Octane 0G - 3D Glider Racing prototype with hover physics, nitro overheat, and swappable GLB meshes"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
 
@@ -523,10 +620,27 @@ boost={
 export function generateReadme(): string {
   return `# High Octane 0G - 3D Glider Racer Prototype for Godot 4.x
 
+## Swappable 3D Model Architecture:
+The physics body and visual mesh are completely separated:
+- **Node Hierarchy**:
+  \`Ship (CharacterBody3D)\`
+  ├── \`CollisionShape3D\` (Fixed box collider)
+  ├── \`RayCast3D\` (Ground hover sensor)
+  ├── \`Camera3D\` (Ship-tracked third-person camera)
+  └── \`ShipModel (Node3D)\` (Visual pivot for roll, pitch, and imported mesh)
+
+### How to Import Any Custom 3D Model (.glb) into Godot:
+1. Drop your \`.glb\` file into the Godot project filesystem.
+2. In the scene tree, open \`main.tscn\` and select \`Ship/ShipModel\`.
+3. Replace the placeholder \`MeshInstance3D\` with your imported \`.glb\` scene (or drag the .glb into \`ShipModel\`).
+4. Alternatively, in your script call:
+   \`$Ship.set_ship_model(preload("res://my_custom_ship.glb"))\`
+   This automatically computes the AABB, centers the model at (X=0, Z=0), aligns the base at Y=0, and normalizes length to \`target_model_length\`.
+
 ## Nitro Overheat System:
 - **Heat Generation**: Boosting with throttle generates engine heat (18.0 units/sec, ~5.5s of continuous nitro).
 - **Cooldown**: Releasing nitro initiates cooldown after a 0.4s grace delay (9.0 units/sec).
-- **Lockout & Recovery**: If heat reaches 100, the nitro engine locks out until heat cools down to below 40. Normal driving continues unhindered.
+- **Lockout & Recovery**: If heat reaches 100, the nitro engine locks out until heat cools down below 40. Normal driving continues unhindered.
 - **HUD Bar**: Visible ProgressBar on the CanvasLayer displays live heat and overheat status.
 
 ## Hover Lift Effect:
